@@ -1,20 +1,20 @@
 (function (root, factory) {
     'use strict';
     if (// Universal Module Definition (UMD) to support AMD, CommonJS/Node.js,
-        // Rhino, and plain browser loading.
+        // Rhino.
         typeof define === 'function' && define.amd) {
         define([
             'exports',
-            'expander'
+            'expander',
+            'acorn'
         ], factory);
     } else if (typeof exports !== 'undefined') {
-        factory(exports, require('./expander'));
-    } else {
-        factory(root.esprima = {});
+        factory(exports, require('./expander'), require('acorn'));
     }
-}(this, function (exports$2, expander) {
+}(this, function (exports$2, expander, acorn) {
     'use strict';
-    var Token, TokenName, Messages, Regex, source, index, lineNumber, lineStart, length, tokenStream, streamIndex, state, extra;
+    var tt, Token, Messages, Regex, comments, t;
+    tt = acorn.tokTypes;
     Token = {
         BooleanLiteral: 1,
         EOF: 2,
@@ -28,17 +28,6 @@
         Template: 10,
         Delimiter: 11
     };
-    TokenName = {};
-    TokenName[Token.BooleanLiteral] = 'Boolean';
-    TokenName[Token.EOF] = '<end>';
-    TokenName[Token.Identifier] = 'Identifier';
-    TokenName[Token.Keyword] = 'Keyword';
-    TokenName[Token.NullLiteral] = 'Null';
-    TokenName[Token.NumericLiteral] = 'Numeric';
-    TokenName[Token.Punctuator] = 'Punctuator';
-    TokenName[Token.StringLiteral] = 'String';
-    TokenName[Token.RegularExpression] = 'RegularExpression';
-    TokenName[Token.Delimiter] = 'Delimiter';
     // Error messages should be identical to V8.
     Messages = {
         UnexpectedToken: 'Unexpected token %0',
@@ -63,35 +52,6 @@
     function isIn(el, list) {
         return list.indexOf(el) !== -1;
     }
-    function isDecimalDigit(ch) {
-        return ch >= 48 && ch <= 57;
-    }
-    function isHexDigit(ch) {
-        return '0123456789abcdefABCDEF'.indexOf(ch) >= 0;
-    }
-    function isWhiteSpace(ch) {
-        return ch === 32 || // space
-        ch === 9 || // tab
-        ch === 11 || ch === 12 || ch === 160 || ch >= 5760 && '\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000\uFEFF'.indexOf(String.fromCharCode(ch)) > 0;
-    }
-    function isLineTerminator(ch) {
-        return ch === 10 || ch === 13 || ch === 8232 || ch === 8233;
-    }
-    function isIdentifierStart(ch) {
-        return ch === 36 || ch === 95 || // $ (dollar) and _ (underscore)
-        ch >= 65 && ch <= 90 || // A..Z
-        ch >= 97 && ch <= 122 || // a..z
-        ch === 92 || // \ (backslash)
-        ch >= 128 && Regex.NonAsciiIdentifierStart.test(String.fromCharCode(ch));
-    }
-    function isIdentifierPart(ch) {
-        return ch === 36 || ch === 95 || // $ (dollar) and _ (underscore)
-        ch >= 65 && ch <= 90 || // A..Z
-        ch >= 97 && ch <= 122 || // a..z
-        ch >= 48 && ch <= 57 || // 0..9
-        ch === 92 || // \ (backslash)
-        ch >= 128 && Regex.NonAsciiIdentifierPart.test(String.fromCharCode(ch));
-    }
     function isFutureReservedWord(id) {
         switch (id) {
         case 'class':
@@ -105,213 +65,144 @@
             return false;
         }
     }
-    function isKeyword(id) {
-        switch (// 'const' is specialized as Keyword in V8.
-            // 'yield' is only treated as a keyword in strict mode.
-            // 'let' is for compatiblity with SpiderMonkey and ES.next.
-            // Some others are from future reserved words.
-            id.length) {
-        case 2:
-            return id === 'if' || id === 'in' || id === 'do';
-        case 3:
-            return id === 'var' || id === 'for' || id === 'new' || id === 'try' || id === 'let';
-        case 4:
-            return id === 'this' || id === 'else' || id === 'case' || id === 'void' || id === 'with' || id === 'enum';
-        case 5:
-            return id === 'while' || id === 'break' || id === 'catch' || id === 'throw' || id === 'const' || id === 'class' || id === 'super';
-        case 6:
-            return id === 'return' || id === 'typeof' || id === 'delete' || id === 'switch' || id === 'export' || id === 'import';
-        case 7:
-            return id === 'default' || id === 'finally' || id === 'extends';
-        case 8:
-            return id === 'function' || id === 'continue' || id === 'debugger';
-        case 10:
-            return id === 'instanceof';
-        default:
-            return false;
-        }
-    }
-    function scanHexEscape(prefix) {
-        var i, len, ch, code = 0;
-        len = prefix === 'u' ? 4 : 2;
-        for (i = 0; i < len; ++i) {
-            if (index < length && isHexDigit(source[index])) {
-                ch = source[index++];
-                code = code * 16 + '0123456789abcdef'.indexOf(ch.toLowerCase());
-            } else {
-                return '';
-            }
-        }
-        return String.fromCharCode(code);
-    }
-    function scanRegExp() {
-        var str, ch, start, pattern, flags, value, classMarker = false, restore, terminated = false;
-        scanComment();
-        start = index;
-        ch = source[index];
-        assert(ch === '/', 'Regular expression literal must start with a slash');
-        str = source[index++];
-        while (index < length) {
-            ch = source[index++];
-            str += ch;
-            if (classMarker) {
-                if (ch === ']') {
-                    classMarker = false;
-                }
-            } else {
-                if (ch === '\\') {
-                    ch = source[index++];
-                    if (// ECMA-262 7.8.5
-                        isLineTerminator(ch.charCodeAt(0))) {
-                        throwError({}, Messages.UnterminatedRegExp);
-                    }
-                    str += ch;
-                } else if (ch === '/') {
-                    terminated = true;
-                    break;
-                } else if (ch === '[') {
-                    classMarker = true;
-                } else if (isLineTerminator(ch.charCodeAt(0))) {
-                    throwError({}, Messages.UnterminatedRegExp);
-                }
-            }
-        }
-        if (!terminated) {
-            throwError({}, Messages.UnterminatedRegExp);
-        }
-        // Exclude leading and trailing slash.
-        pattern = str.substr(1, str.length - 2);
-        flags = '';
-        while (index < length) {
-            ch = source[index];
-            if (!isIdentifierPart(ch.charCodeAt(0))) {
-                break;
-            }
-            ++index;
-            if (ch === '\\' && index < length) {
-                ch = source[index];
-                if (ch === 'u') {
-                    ++index;
-                    restore = index;
-                    ch = scanHexEscape('u');
-                    if (ch) {
-                        flags += ch;
-                        for (str += '\\u'; restore < index; ++restore) {
-                            str += source[restore];
-                        }
-                    } else {
-                        index = restore;
-                        flags += 'u';
-                        str += '\\u';
-                    }
-                } else {
-                    str += '\\';
-                }
-            } else {
-                flags += ch;
-                str += ch;
-            }
-        }
-        try {
-            value = new RegExp(pattern, flags);
-        } catch (e) {
-            throwError({}, Messages.InvalidRegExp);
-        }
-        return {
-            type: Token.RegularExpression,
-            literal: str,
-            value: value,
-            range: [
-                start,
-                index
-            ]
-        };
-    }
     function advance() {
-        var ch;
-        scanComment();
-        if (index >= length) {
-            return {
-                type: Token.EOF,
-                lineNumber: lineNumber,
-                lineStart: lineStart,
-                range: [
-                    index,
-                    index
-                ]
-            };
-        }
-        ch = source.charCodeAt(index);
-        if (// Very common: ( and ) and ;
-            ch === 40 || ch === 41 || ch === 58) {
-            return scanPunctuator();
-        }
-        if (// String literal starts with single quote (#39) or double quote (#34).
-            ch === 39 || ch === 34) {
-            return scanStringLiteral();
-        }
-        if (ch === 96) {
-            return scanTemplate();
-        }
-        if (isIdentifierStart(ch)) {
-            return scanIdentifier();
-        }
-        if (// # and @ are allowed for sweet.js
-            ch === 35 || ch === 64) {
-            ++index;
-            return {
-                type: Token.Punctuator,
-                value: String.fromCharCode(ch),
-                lineNumber: lineNumber,
-                lineStart: lineStart,
-                range: [
-                    index - 1,
-                    index
-                ]
-            };
-        }
-        if (// Dot (.) char #46 can also start a floating-point number, hence the need
-            // to check the next character.
-            ch === 46) {
-            if (isDecimalDigit(source.charCodeAt(index + 1))) {
-                return scanNumericLiteral();
+        var token = t.getToken();
+        var type = token.type;
+        var start = token.loc.start;
+        var value = token.value;
+        var isKeyword = !!token.keyword;
+        switch (type) {
+        case tt.name:
+            type = Token.Identifier;
+            break;
+        case tt.semi:
+        case tt.comma:
+        case tt.parenL:
+        case tt.parenR:
+        case tt.braceL:
+        case tt.braceR:
+        case tt.slash:
+        case tt.dot:
+        case tt.bracketL:
+        case tt.bracketR:
+        case tt.ellipsis:
+        case tt.arrow:
+        case tt.star:
+        case tt.incDec:
+        case tt.colon:
+        case tt.question:
+        case tt.template:
+        case tt.backQuote:
+        case tt.dollarBraceL:
+        case tt.at:
+        case tt.logicalOR:
+        case tt.logicalAND:
+        case tt.bitwiseOR:
+        case tt.bitwiseXOR:
+        case tt.bitwiseAND:
+        case tt.equality:
+        case tt.relational:
+        case tt.bitShift:
+        case tt.plusMin:
+        case tt.modulo:
+        case tt.exponent:
+        case tt.prefix:
+        case tt.doubleColon:
+            value = value || type.label;
+            type = Token.Punctuator;
+            break;
+        case tt.jsxTagStart:
+            type = Token.Punctuator;
+            value = '<';
+            break;
+        case tt.jsxTagEnd:
+            type = Token.Punctuator;
+            value = '>';
+            break;
+        case tt.jsxName:
+            type = Token.Identifier;
+            // "JSXIdentifier";
+            break;
+        case tt.jsxText:
+            type = Token.StringLiteral;
+            // "JSXText";
+            break;
+        case tt._null:
+            type = Token.NullLiteral;
+            break;
+        case tt._false:
+        case tt._true:
+            type = Token.BooleanLiteral;
+            break;
+        case tt.num:
+            type = Token.NumericLiteral;
+            value = String(value);
+            break;
+        case tt.string:
+            type = Token.StringLiteral;
+            value = JSON.stringify(value);
+            break;
+        case tt.regexp:
+            type = Token.RegularExpression;
+            break;
+        case tt.eof:
+            type = Token.EOF;
+            break;
+        default:
+            if (type.isAssign) {
+                if (!value)
+                    value = type.label;
+                type = Token.Punctuator;
+            } else if (type.keyword) {
+                type = Token.Keyword;
+            } else {
+                var found = false;
+                for (var tokenTypeName in tt) {
+                    if (type === tt[tokenTypeName]) {
+                        found = true;
+                        break;
+                    }
+                }
+                throw new TypeError('Unknown token type (' + start.line + ':' + start.column + '): ' + (found ? tokenTypeName : '<unknown>'));
             }
-            return scanPunctuator();
         }
-        if (isDecimalDigit(ch)) {
-            return scanNumericLiteral();
+        token = {
+            type: type,
+            _isKeyword: isKeyword,
+            lineNumber: start.line,
+            lineStart: start.column,
+            range: token.range
+        };
+        if (type === Token.RegularExpression) {
+            token.value = String(value.value);
+            token.regex = {
+                pattern: value.pattern,
+                flags: value.flags
+            };
+        } else {
+            token.value = value;
         }
-        return scanPunctuator();
+        return token;
     }
     function throwError(token, messageFormat) {
         var error, args = Array.prototype.slice.call(arguments, 2), msg = messageFormat.replace(/%(\d)/g, function (whole, index$2) {
                 assert(index$2 < args.length, 'Message reference must be in range');
                 return args[index$2];
             });
-        var startIndex = streamIndex > 3 ? streamIndex - 3 : 0;
         var toks = '', tailingMsg = '';
-        if (tokenStream) {
-            toks = tokenStream.slice(startIndex, streamIndex + 3).map(function (stx) {
-                return stx.token.value;
-            }).join(' ');
-            tailingMsg = '\n[... ' + toks + ' ...]';
-        }
         if (typeof token.lineNumber === 'number') {
             error = new Error('Line ' + token.lineNumber + ': ' + msg + tailingMsg);
             error.index = token.range[0];
             error.lineNumber = token.lineNumber;
-            error.column = token.range[0] - lineStart + 1;
+            error.column = token.range[0] - t.lineStart + 1;
         } else {
-            error = new Error('Line ' + lineNumber + ': ' + msg + tailingMsg);
+            error = new Error('Line ' + t.curLine + ': ' + msg + tailingMsg);
             error.index = index;
-            error.lineNumber = lineNumber;
-            error.column = index - lineStart + 1;
+            error.lineNumber = t.curLine;
+            error.column = index - t.lineStart + 1;
         }
         error.description = msg;
         throw error;
-    }
-    function throwErrorTolerant() {
-        throwError.apply(null, arguments);
     }
     function throwUnexpected(token) {
         if (token.type === Token.EOF) {
@@ -336,146 +227,6 @@
         }
         // BooleanLiteral, NullLiteral, or Punctuator.
         throwError(token, Messages.UnexpectedToken, token.value);
-    }
-    function addComment(type, value, start, end, loc) {
-        var comment;
-        assert(typeof start === 'number', 'Comment must have valid position');
-        if (// Because the way the actual token is scanned, often the comments
-            // (if any) are skipped twice during the lexical analysis.
-            // Thus, we need to skip adding a comment if the comment array already
-            // handled it.
-            state.lastCommentStart >= start) {
-            return;
-        }
-        state.lastCommentStart = start;
-        comment = {
-            type: type,
-            value: value
-        };
-        comment.range = [
-            start,
-            end
-        ];
-        comment.loc = loc;
-        extra.comments.push(comment);
-    }
-    function scanComment() {
-        var comment, ch, loc, start, blockComment, lineComment;
-        comment = '';
-        blockComment = false;
-        lineComment = false;
-        while (index < length) {
-            ch = source[index];
-            if (lineComment) {
-                ch = source[index++];
-                if (isLineTerminator(ch.charCodeAt(0))) {
-                    loc.end = {
-                        line: lineNumber,
-                        column: index - lineStart - 1
-                    };
-                    lineComment = false;
-                    addComment('Line', comment, start, index - 1, loc);
-                    if (ch === '\r' && source[index] === '\n') {
-                        ++index;
-                    }
-                    ++lineNumber;
-                    lineStart = index;
-                    comment = '';
-                } else if (index >= length) {
-                    lineComment = false;
-                    comment += ch;
-                    loc.end = {
-                        line: lineNumber,
-                        column: length - lineStart
-                    };
-                    addComment('Line', comment, start, length, loc);
-                } else {
-                    comment += ch;
-                }
-            } else if (blockComment) {
-                if (isLineTerminator(ch.charCodeAt(0))) {
-                    if (ch === '\r' && source[index + 1] === '\n') {
-                        ++index;
-                        comment += '\r\n';
-                    } else {
-                        comment += ch;
-                    }
-                    ++lineNumber;
-                    ++index;
-                    lineStart = index;
-                    if (index >= length) {
-                        throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
-                    }
-                } else {
-                    ch = source[index++];
-                    if (index >= length) {
-                        throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
-                    }
-                    comment += ch;
-                    if (ch === '*') {
-                        ch = source[index];
-                        if (ch === '/') {
-                            comment = comment.substr(0, comment.length - 1);
-                            blockComment = false;
-                            ++index;
-                            loc.end = {
-                                line: lineNumber,
-                                column: index - lineStart
-                            };
-                            addComment('Block', comment, start, index, loc);
-                            comment = '';
-                        }
-                    }
-                }
-            } else if (ch === '/') {
-                ch = source[index + 1];
-                if (ch === '/') {
-                    loc = {
-                        start: {
-                            line: lineNumber,
-                            column: index - lineStart
-                        }
-                    };
-                    start = index;
-                    index += 2;
-                    lineComment = true;
-                    if (index >= length) {
-                        loc.end = {
-                            line: lineNumber,
-                            column: index - lineStart
-                        };
-                        lineComment = false;
-                        addComment('Line', comment, start, index, loc);
-                    }
-                } else if (ch === '*') {
-                    start = index;
-                    index += 2;
-                    blockComment = true;
-                    loc = {
-                        start: {
-                            line: lineNumber,
-                            column: index - lineStart - 2
-                        }
-                    };
-                    if (index >= length) {
-                        throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
-                    }
-                } else {
-                    break;
-                }
-            } else if (isWhiteSpace(ch.charCodeAt(0))) {
-                ++index;
-            } else if (isLineTerminator(ch.charCodeAt(0))) {
-                ++index;
-                if (ch === '\r' && source[index] === '\n') {
-                    ++index;
-                }
-                ++lineNumber;
-                lineStart = index;
-            } else {
-                break;
-            }
-        }
     }
     function blockAllowed(toks, start, inExprDelim, parentIsBlock) {
         var assignOps = [
@@ -584,13 +335,13 @@
             'with'
         ];
         var last = toks.length - 1;
-        var comments, commentsLen = extra.comments.length;
+        var _comments, commentsLen = comments.length;
         function back(n) {
             var idx = toks.length - n > 0 ? toks.length - n : 0;
             return toks[idx];
         }
         function attachComments(token) {
-            if (comments) {
+            if (_comments) {
                 token.leadingComments = comments;
             }
             return token;
@@ -601,12 +352,11 @@
         function _scanRegExp() {
             return attachComments(scanRegExp());
         }
-        scanComment();
-        var ch = source[index];
-        if (extra.comments.length > commentsLen) {
-            comments = extra.comments.slice(commentsLen);
+        var ch = t.input[t.pos];
+        if (comments.length > commentsLen) {
+            _comments = comments.slice(commentsLen);
         }
-        if (isIn(source[index], delimiters)) {
+        if (isIn(t.input[t.pos], delimiters)) {
             return attachComments(readDelim(toks, inExprDelim, parentIsBlock));
         }
         if (ch === '/') {
@@ -659,7 +409,7 @@
                     // ... + /...
                     return _scanRegExp();
                 }
-                if (isKeyword(prev.value) && prev.value !== 'this' && prev.value !== 'let' && prev.value !== 'export') {
+                if (prev._isKeyword && prev.value !== 'this' && prev.value !== 'let' && prev.value !== 'export') {
                     // typeof /...
                     return _scanRegExp();
                 }
@@ -695,7 +445,7 @@
         if (startDelim.value === '{') {
             delimIsBlock = blockAllowed(toks.concat(delimToken), 0, inExprDelim, parentIsBlock);
         }
-        while (index <= length) {
+        while (t.pos <= t.input.length) {
             token = readToken(inner, startDelim.value === '(' || startDelim.value === '[', delimIsBlock);
             if (token.type === Token.Punctuator && token.value === matchDelim[startDelim.value]) {
                 if (token.leadingComments) {
@@ -709,7 +459,7 @@
             }
         }
         if (// at the end of the stream but the very last char wasn't the closing delimiter
-            index >= length && matchDelim[startDelim.value] !== source[length - 1]) {
+            t.pos >= t.input.length && matchDelim[startDelim.value] !== t.input[t.input.length - 1]) {
             throwError({}, Messages.UnexpectedEOS);
         }
         var endLineNumber = token.lineNumber;
@@ -722,40 +472,18 @@
         return delimToken;
     }
     function read(code) {
-        var token, tokenTree = [];
-        extra = {};
-        extra.comments = [];
-        extra.range = true;
-        extra.loc = true;
-        source = code;
-        index = 0;
-        lineNumber = source.length > 0 ? 1 : 0;
-        lineStart = 0;
-        length = source.length;
-        state = {
-            allowIn: true,
-            labelSet: {},
-            lastParenthesized: null,
-            inFunctionBody: false,
-            inIteration: false,
-            inSwitch: false
-        };
-        while (index < length) {
-            tokenTree.push(readToken(tokenTree, false, false));
-        }
-        var last = tokenTree[tokenTree.length - 1];
-        if (last && last.type !== Token.EOF) {
-            tokenTree.push({
-                type: Token.EOF,
-                value: '',
-                lineNumber: last.lineNumber,
-                lineStart: last.lineStart,
-                range: [
-                    index,
-                    index
-                ]
-            });
-        }
+        var tokenTree = [];
+        comments = [];
+        t = acorn.tokenizer(code, {
+            ecmaVersion: 6,
+            locations: true,
+            ranges: true,
+            onComment: comments
+        });
+        do {
+            var token = readToken(tokenTree, false, false);
+            tokenTree.push(token);
+        } while (token.type !== Token.EOF);
         return expander.tokensToSyntax(tokenTree);
     }
     exports$2.read = read;

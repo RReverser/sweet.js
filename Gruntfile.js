@@ -29,6 +29,15 @@ module.exports = function(grunt) {
                 src: "src/*.js",
                 dest: ["build/lib/", "browser/scripts/"]
             },
+            parser: {
+                options: {
+                    sourceMap: false,
+                    compileFrom: "./lib/sweet",
+                    modules: ["contracts-js/macros"]
+                },
+                src: "src/parser.js",
+                dest: ["build/lib/", "browser/scripts/"]
+            },
             release: {
                 options: {
                     compileFrom: "./lib/sweet",
@@ -169,6 +178,10 @@ module.exports = function(grunt) {
             sweetjs: {
                 files: ["src/*.js", "test/**/*.js", "macros/*"],
                 tasks: ["default"]
+            },
+            parser: {
+                files: ["src/parser.js"],
+                tasks: ["build:parser"]
             }
         }
     });
