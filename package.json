@@ -7,12 +7,6 @@
     "node": ">=0.4.0"
   },
   "author": "Tim Disney",
-  "licenses": [
-    {
-      "type": "BSD",
-      "url": "http://github.com/mozilla/sweet.js/master/LICENSE.BSD"
-    }
-  ],
   "scripts": {
     "test": "node --harmony ./node_modules/.bin/grunt full --stack"
   },
@@ -23,6 +17,7 @@
     "sjs": "bin/sjs"
   },
   "dependencies": {
+    "acorn": "^2.0.4",
     "escodegen": "1.6.x",
     "escope": "1.0.x",
     "optimist": "~0.3.4",
@@ -51,5 +46,5 @@
     "javascript",
     "macros"
   ],
-  "license": "BSD"
+  "license": "BSD-2-Clause"
 }

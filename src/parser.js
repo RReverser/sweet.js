@@ -1,4 +1,5 @@
 /*
+  Copyright (C) 2015 Ingvar Stepanyan <me@rreverser.com>
   Copyright (C) 2013 Ariya Hidayat <ariya.hidayat@gmail.com>
   Copyright (C) 2013 Thaddee Tyl <thaddee.tyl@gmail.com>
   Copyright (C) 2012 Ariya Hidayat <ariya.hidayat@gmail.com>
@@ -48,15 +49,13 @@ parseYieldExpression: true
     'use strict';
 
     // Universal Module Definition (UMD) to support AMD, CommonJS/Node.js,
-    // Rhino, and plain browser loading.
+    // Rhino.
     if (typeof define === 'function' && define.amd) {
-        define(['exports', 'expander'], factory);
+        define(['exports', 'expander', 'acorn'], factory);
     } else if (typeof exports !== 'undefined') {
-        factory(exports, require("./expander"));
-    } else {
-        factory((root.esprima = {}));
+        factory(exports, require("./expander"), require("acorn"));
     }
-}(this, function (exports, expander) {
+}(this, function (exports, expander, acorn) {
     'use strict';
 
     var Token,
